@@ -1,5 +1,3 @@
-# this file stores all the hardcoded graphql queries used by the api
-
 MEDIA_LIST_FIELDS = """
     id
     title { romaji english native }
