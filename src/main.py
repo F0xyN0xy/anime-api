@@ -7,10 +7,8 @@ from src.config import HEADERS
 import httpx
 import os
 
-# main Kuhi api initialization
 app = FastAPI(title="Kuhi API", version="2.0")
 
-# enable CORS for video streaming
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -19,62 +17,67 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# mount static files for assets
 if os.path.exists("assets"):
     app.mount("/assets", StaticFiles(directory="assets"), name="assets")
 
-# include routes under the /anime prefix for modular future scaling (ex: /movies)
 app.include_router(router, prefix="/anime")
 
 from fastapi import Query
 from fastapi.responses import Response
 
+
+def _norm_url(url: str) -> str | None:
+    url = (url or "").strip()
+    if url.startswith("//"):
+        return "https:" + url
+    if url.startswith("http://") or url.startswith("https://"):
+        return url
+    return None
+
+
 @app.get("/proxy_m3u8")
 async def proxy_m3u8(url: str, referer: str):
-    # acts as a simple header injector to bypass cdn referer checks
+    url = _norm_url(url)
+    if not url:
+        return Response(content='{"detail":"bad proxy url"}', status_code=400,
+                        media_type="application/json")
     async with httpx.AsyncClient(timeout=10.0) as client:
         h = HEADERS.copy()
         h["Referer"] = referer
         resp = await client.get(url, headers=h)
-        
-        # rewrite ALL URLs in playlist to go through proxy
+
         content = resp.text
-        base_url = url.rsplit('/', 1)[0] + '/'
         lines = []
-        from urllib.parse import quote
+        from urllib.parse import quote, urljoin
         for line in content.split('\n'):
             stripped = line.strip()
             if stripped and not stripped.startswith('#'):
-                # handle both relative and absolute URLs
-                if stripped.startswith('http'):
-                    absolute_url = stripped
-                elif not stripped.startswith('/'):
-                    absolute_url = base_url + stripped
-                else:
-                    absolute_url = stripped
-                
-                # route through appropriate proxy
+                absolute_url = urljoin(url, stripped)
                 if '.m3u8' in stripped:
                     line = f"/proxy_m3u8?url={quote(absolute_url, safe='')}&referer={quote(referer, safe='')}"
                 else:
                     line = f"/proxy_segment?url={quote(absolute_url, safe='')}&referer={quote(referer, safe='')}"
             lines.append(line)
-        
+
         return Response(content='\n'.join(lines), media_type="application/vnd.apple.mpegurl")
+
 
 @app.get("/proxy_segment")
 async def proxy_segment(url: str, referer: str):
-    # proxy video segments with proper headers
+    url = _norm_url(url)
+    if not url:
+        return Response(content='{"detail":"bad proxy url"}', status_code=400,
+                        media_type="application/json")
     async with httpx.AsyncClient(timeout=30.0) as client:
         h = HEADERS.copy()
         h["Referer"] = referer
         resp = await client.get(url, headers=h)
         return Response(content=resp.content, media_type="video/mp2t")
 
+
 @app.get("/", response_class=HTMLResponse)
 async def home():
-    # minimalist black and white interactive page for Kuhi API
-    # updated playground with editable input fields for custom params
+
     return """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -116,7 +119,7 @@ async def home():
         }
 
         header { margin-bottom: 60px; text-align: left; }
-        
+
         .warning-box {
             background: rgba(220, 38, 38, 0.1);
             border: 1px solid rgba(220, 38, 38, 0.3);
@@ -130,7 +133,7 @@ async def home():
             font-weight: 500;
         }
         .warning-box strong { color: #ef4444; }
-        
+
         .logo-box { width: 48px; height: 48px; border: 2px solid #fff; border-radius: 8px; margin-bottom: 24px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 1.5rem; }
 
         h1 { font-size: 3.5rem; font-weight: 700; letter-spacing: -0.05em; line-height: 1; }
@@ -184,13 +187,13 @@ async def home():
         .try-btn:hover { opacity: 0.8; }
 
         pre { font-family: monospace; font-size: 0.75rem; color: var(--text-muted); background: var(--muted); padding: 16px; border-radius: 6px; border: 1px solid var(--border); margin-top: 16px; white-space: pre-wrap; word-break: break-all; }
-        
+
         .res-box { margin-top: 20px; display: none; max-height: 400px; overflow-y: auto; }
         .loading { font-size: 0.8rem; color: var(--text-muted); display: none; margin-top: 10px; }
 
         .player-wrap { margin-top: 24px; display: none; background: #000; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); aspect-ratio: 16/9; position: relative; }
         video { width: 100%; height: 100%; display: block; }
-        
+
         .curl-box { margin-top: 16px; display: none; background: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 12px; position: relative; }
         .curl-box code { font-family: monospace; font-size: 0.75rem; color: var(--fg); word-break: break-all; display: block; }
         .copy-curl { position: absolute; top: 8px; right: 8px; background: var(--fg); color: var(--bg); border: none; padding: 4px 10px; border-radius: 4px; font-size: 0.7rem; cursor: pointer; font-weight: 600; }
@@ -426,15 +429,34 @@ async def home():
         </div>
 
         <span class="lbl">all-in-one automation</span>
-        
+
         <div class="card">
             <div class="meta">
                 <div><span class="method" style="background:#fff;color:#000">GET</span> <span class="path">extract</span> <span class="tag">magic</span></div>
             </div>
-            <div class="desc">use anilist id (21827) or full anime name (violet evergarden). get id from /anime/search if needed. movies auto-detect.</div>
+            <div class="desc">use anilist id (21827) or full anime name (violet evergarden). get id from /anime/search if needed. movies auto-detect. pick a provider or leave on auto for fastest-wins.</div>
             <div class="sandbox">
                 <input type="text" class="in-url" value="/anime/extract/violet-evergarden?e=1">
                 <button class="try-btn" onclick="test(this)">execute</button>
+            </div>
+            <div class="sandbox">
+                <select class="in-url in-prov">
+                    <option value="">auto (fastest wins)</option>
+                    <option value="anineko">anineko</option>
+                    <option value="anizone">anizone</option>
+                    <option value="anikoto">anikoto</option>
+                    <option value="reanime">reanime</option>
+                    <option value="aniwaves">aniwaves</option>
+                    <option value="kaa">kaa</option>
+                    <option value="anibd">anibd</option>
+                    <option value="animegg">animegg</option>
+                    <option value="mkissa">mkissa</option>
+                    <option value="animeonsen">animeonsen</option>
+                </select>
+                <select class="in-url in-type">
+                    <option value="sub">sub</option>
+                    <option value="dub">dub</option>
+                </select>
             </div>
             <div class="loading">working...</div>
             <div class="player-wrap"><video id="hls-player" controls @play="refreshReferer"></video></div>
@@ -454,7 +476,15 @@ async def home():
         async function test(btn) {
             const card = btn.closest('.card');
             const input = card.querySelector('.in-url');
-            const endpoint = input.value;
+            let endpoint = input.value;
+            const prov = card.querySelector('.in-prov');
+            const typ = card.querySelector('.in-type');
+            if (prov && prov.value) {
+                endpoint += (endpoint.includes('?') ? '&' : '?') + 'provider=' + encodeURIComponent(prov.value);
+            }
+            if (typ && typ.value) {
+                endpoint += (endpoint.includes('?') ? '&' : '?') + 'type=' + encodeURIComponent(typ.value);
+            }
             const resBox = card.querySelector('.res-box');
             const pre = resBox.querySelector('pre');
             const loader = card.querySelector('.loading');
@@ -486,7 +516,7 @@ async def home():
                         hls.loadSource(proxyUrl);
                         hls.attachMedia(video);
                         card.querySelector('.player-wrap').style.display = 'block';
-                        
+
                         // add curl command for m3u8
                         const curlCmd = `curl -H "Referer: ${hlsStream.referer}" "${hlsStream.url}"`;
                         const curlBox = card.querySelector('.curl-box');
@@ -503,7 +533,7 @@ async def home():
                 loader.style.display = 'none';
             }
         }
-        
+
         function copyCurl(btn) {
             const code = btn.parentElement.querySelector('code').textContent;
             navigator.clipboard.writeText(code);
