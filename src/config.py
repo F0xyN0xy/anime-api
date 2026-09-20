@@ -9,7 +9,6 @@ ANILIST_URL = "https://graphql.anilist.co"
 MIRURO_BASE_URLS = [
     "https://www.miruro.ru",
     "https://www.miruro.bz",
-    "https://www.miruro.online",
 ]
 
 MIRURO_PIPE_PATH = "/api/secure/pipe"

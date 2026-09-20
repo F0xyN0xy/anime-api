@@ -1,3 +1,5 @@
+import asyncio
+
 import httpx
 from fastapi import HTTPException
 from src.config import ANILIST_URL, iter_miruro_pipe_targets
@@ -18,11 +20,26 @@ async def anilist_query(query: str, variables: dict = None):
         "Referer": "https://www.miruro.ru/",
     }
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        res = await client.post(ANILIST_URL, json=body, headers=headers)
-        if res.status_code != 200:
-            raise HTTPException(status_code=500, detail="anilist query failed")
-        return res.json().get("data", {})
+    last_err = None
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                res = await client.post(ANILIST_URL, json=body, headers=headers)
+                if res.status_code == 429:
+                    wait = 2 * (attempt + 1)
+                    print(f"[KUHI API] anilist rate-limited, retrying in {wait}s")
+                    await asyncio.sleep(wait)
+                    continue
+                if res.status_code != 200:
+                    raise HTTPException(status_code=500, detail="anilist query failed")
+                return res.json().get("data", {})
+        except HTTPException:
+            raise
+        except Exception as e:
+            last_err = e
+            print(f"[KUHI API] anilist query attempt {attempt + 1} failed: {type(e).__name__}: {e}")
+            await asyncio.sleep(1.5 * (attempt + 1))
+    raise HTTPException(status_code=502, detail=f"anilist unreachable: {last_err}")
 
 
 async def fetch_raw_episodes(anilist_id: int) -> dict:
