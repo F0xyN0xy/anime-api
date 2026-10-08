@@ -8,8 +8,9 @@ clean slug-based URLs:
   hstream.moe/hentai/{slug}
   hanime.tv/videos/hentai/{slug}
 
-Strategy: slugify the AniList title variants, probe both sites, scrape the
-HTML for video sources (m3u8/mp4/embed), and return them as streams.
+Strategy: slugify the AniList title variants, probe both sites with many
+slug candidates (including episode/season suffix variants), scrape the HTML
+for video sources (m3u8/mp4/embed), and return them as streams.
 
 This provider is ONLY used for adult content — the frontend resolver
 checks `isAdult` from AniList before including it in the race.
@@ -45,8 +46,17 @@ def _slugify(title: str) -> str:
     )
 
 
-def _build_slugs(media: dict) -> list:
-    """Generate slug candidates from all title variants."""
+def _build_slugs(media: dict, episode: int) -> list:
+    """Generate slug candidates from all title variants.
+
+    hstream.moe and hanime.tv index by title slug, not AniList ID. The
+    AniList title (english/romaji/native) often differs from what the site
+    uses. We generate many candidates:
+    - Full title slug
+    - Without "the animation" / "ova" / "special" suffixes
+    - With/without season markers
+    - With episode suffix (for multi-episode series)
+    """
     titles = []
     t = media.get("title") or {}
     for key in ("english", "romaji", "native"):
@@ -61,17 +71,40 @@ def _build_slugs(media: dict) -> list:
     slugs = []
     for title in titles:
         s = _slugify(title)
-        if s and s not in seen:
+        if not s:
+            continue
+
+        # Base slug (no episode suffix)
+        if s not in seen:
             seen.add(s)
             slugs.append(s)
-        # Try stripping common suffixes
-        for suffix in (" the animation", " ova", " special"):
-            suffix_slug = suffix.replace(" ", "-")
-            if s.endswith(suffix_slug):
-                stripped = s[: -len(suffix_slug)]
+
+        # Strip common suffixes that sites often omit
+        for suffix in ("-the-animation", "-ova", "-special", "-season-1", "-season-2", "-season-3"):
+            if s.endswith(suffix):
+                stripped = s[: -len(suffix)]
                 if stripped and stripped not in seen:
                     seen.add(stripped)
                     slugs.append(stripped)
+
+        # Try without trailing numbers (e.g. "kokuhaku-4" -> "kokuhaku")
+        base = re.sub(r"-\d+$", "", s)
+        if base and base != s and base not in seen:
+            seen.add(base)
+            slugs.append(base)
+
+        # For multi-episode series, try with episode suffix
+        if episode > 1:
+            ep_slug = f"{s}-{episode}"
+            if ep_slug not in seen:
+                seen.add(ep_slug)
+                slugs.append(ep_slug)
+            # Also try zero-padded
+            ep_slug2 = f"{s}-{str(episode).zfill(2)}"
+            if ep_slug2 not in seen:
+                seen.add(ep_slug2)
+                slugs.append(ep_slug2)
+
     return slugs
 
 
@@ -208,25 +241,19 @@ async def _probe_page(url: str) -> str | None:
 
 async def _find_page(media: dict, episode: int):
     """Find the correct page URL on hstream or hanime. Returns (base, html) or None."""
-    slugs = _build_slugs(media)
+    slugs = _build_slugs(media, episode)
     if not slugs:
         return None
 
-    # For multi-episode series, try episode suffixes
-    ep_suffixes = [""]
-    if episode > 1:
-        ep_suffixes = [f"-{episode}", f"-{str(episode).zfill(2)}", ""]
-
     for slug in slugs:
-        for suffix in ep_suffixes:
-            targets = [
-                (BASE_HSTREAM, f"{BASE_HSTREAM}/hentai/{slug}{suffix}"),
-                (BASE_HANIME, f"{BASE_HANIME}/videos/hentai/{slug}{suffix}"),
-            ]
-            for base, url in targets:
-                html = await _probe_page(url)
-                if html:
-                    return (base, html)
+        targets = [
+            (BASE_HSTREAM, f"{BASE_HSTREAM}/hentai/{slug}"),
+            (BASE_HANIME, f"{BASE_HANIME}/videos/hentai/{slug}"),
+        ]
+        for base, url in targets:
+            html = await _probe_page(url)
+            if html:
+                return (base, html)
     return None
 
 
