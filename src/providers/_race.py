@@ -22,9 +22,13 @@ _watch_cache: dict = {}
 
 def _load(name):
     try:
-        return importlib.import_module(f"src.providers.{name}")
+        mod = importlib.import_module(f"src.providers.{name}")
+        print(f"[RACE] loaded provider: {name}")
+        return mod
     except Exception as e:
-        print(f"[RACE] provider {name} unavailable: {e}")
+        print(f"[RACE] provider {name} FAILED to load: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
@@ -70,22 +74,31 @@ async def _watch_one(mod, name, anilist_id, ep, audio, ctx):
         streams = await asyncio.wait_for(mod.watch(anilist_id, audio, ep, ctx), WATCH_TIMEOUT)
         dt = round(time.time() - t0, 3)
         if streams:
+            print(f"[RACE] {name} SUCCESS in {dt}s: {len(streams)} streams")
             _watch_cache[key] = (time.time() + WATCH_CACHE_TTL, streams)
             return name, streams, dt, True
+        print(f"[RACE] {name} returned empty streams in {dt}s")
         return name, None, dt, False
     except Exception as e:
-        return name, None, round(time.time() - t0, 3), False
+        dt = round(time.time() - t0, 3)
+        print(f"[RACE] {name} FAILED in {dt}s: {e}")
+        import traceback
+        traceback.print_exc()
+        return name, None, dt, False
 
 
 async def race_watch(anilist_id: int, ep: int, audio: str = "sub",
                      preferred: str | None = None) -> dict | None:
     mods = providers()
     if not mods:
+        print(f"[RACE] no providers loaded!")
         return None
+    print(f"[RACE] race_watch: anilist_id={anilist_id} ep={ep} audio={audio} preferred={preferred} providers={[n for n, _ in mods]}")
     ctx = await build_ctx(anilist_id)
     if preferred:
         pick = next((m for m in mods if m[0] == preferred), None)
         if pick is not None:
+            print(f"[RACE] trying preferred provider: {preferred}")
             name, streams, dt, ok = await _watch_one(pick[1], pick[0], anilist_id, ep, audio, ctx)
             record_latency(name, dt, ok)
             if ok:
@@ -93,9 +106,12 @@ async def race_watch(anilist_id: int, ep: int, audio: str = "sub",
                         "requestedProvider": preferred,
                         "timings": {name: {"seconds": dt, "ok": True}},
                         "defaultProvider": default_provider()}
+            print(f"[RACE] preferred provider {preferred} failed, falling back to race")
             mods = [m for m in mods if m[0] != preferred]
             if not mods:
                 return None
+        else:
+            print(f"[RACE] preferred provider {preferred} not in loaded providers!")
     pending = {asyncio.ensure_future(_watch_one(mod, name, anilist_id, ep, audio, ctx))
                for name, mod in mods}
     timings: dict = {}
@@ -128,6 +144,7 @@ async def race_watch(anilist_id: int, ep: int, audio: str = "sub",
                 for task in pending:
                     task.cancel()
     if winner is None:
+        print(f"[RACE] all providers failed for anilist_id={anilist_id} ep={ep}")
         return None
     winner["timings"] = timings
     winner["defaultProvider"] = default_provider()

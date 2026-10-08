@@ -77,6 +77,7 @@ def _build_slugs(media: dict, episode: int) -> list:
         s = _slugify(title)
         if not s:
             continue
+        print(f"[hanime] slug candidate from {title!r}: {s}")
 
         # Base slug (no episode suffix)
         if s not in seen:
@@ -109,6 +110,7 @@ def _build_slugs(media: dict, episode: int) -> list:
                 seen.add(ep_slug2)
                 slugs.append(ep_slug2)
 
+    print(f"[hanime] generated {len(slugs)} slug candidates: {slugs[:5]}...")
     return slugs
 
 
@@ -117,18 +119,31 @@ async def _fetch_json(url: str) -> dict | None:
     try:
         text = await fetch_text(url)
         if not text:
+            print(f"[hanime] empty response from {url}")
             return None
-        return json.loads(text)
-    except Exception:
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            print(f"[hanime] JSON decode error from {url}: {e}")
+            print(f"[hanime] response preview: {text[:200]}")
+            return None
+    except Exception as e:
+        print(f"[hanime] fetch error from {url}: {e}")
         return None
 
 
 async def _try_hentaiocean(slug: str) -> dict | None:
     """Try hentaiocean.com API for a slug. Returns info dict or None."""
     url = f"{BASE_HENTAIOCEAN}/api?action=hentai&slug={slug}"
+    print(f"[hanime] trying hentaiocean: {url}")
     data = await _fetch_json(url)
-    if data and data.get("info") and len(data["info"]) > 0:
-        return data["info"][0]
+    if data:
+        print(f"[hanime] hentaiocean response keys: {list(data.keys())}")
+        if data.get("info") and len(data["info"]) > 0:
+            print(f"[hanime] hentaiocean found: {data['info'][0].get('title', 'unknown')}")
+            return data["info"][0]
+        else:
+            print(f"[hanime] hentaiocean no info for slug={slug}")
     return None
 
 
@@ -245,11 +260,15 @@ async def _probe_page(url: str) -> str | None:
     try:
         html = await fetch_text(url)
         if not html:
+            print(f"[hanime] empty page: {url}")
             return None
         if any(k in html for k in ("<video", "player", "embed", ".m3u8", ".mp4")):
+            print(f"[hanime] valid page found: {url}")
             return html
+        print(f"[hanime] page exists but no video markers: {url}")
         return None
-    except Exception:
+    except Exception as e:
+        print(f"[hanime] probe error {url}: {e}")
         return None
 
 
@@ -329,16 +348,21 @@ async def watch(anilist_id: int, audio: str, ep: int, ctx: dict | None = None) -
         ctx = await build_ctx(anilist_id)
 
     media = ctx["media"]
+    title = (media.get("title") or {}).get("english") or (media.get("title") or {}).get("romaji") or "unknown"
+    print(f"[hanime] watch: anilist_id={anilist_id} title={title!r} ep={ep}")
 
     # Try hentaiocean first (proper API)
     found = await _find_hentaiocean(media, ep)
     if not found:
+        print(f"[hanime] hentaiocean failed, trying hstream/hanime...")
         # Fall back to hstream/hanime HTML scraping
         found = await _find_html_page(media, ep)
     if not found:
+        print(f"[hanime] all sources failed for {title!r} ep={ep}")
         raise RuntimeError(f"Hanime: episode {ep} not found for AniList {anilist_id}")
 
     _, streams = found
+    print(f"[hanime] found {len(streams)} streams")
 
     # Deduplicate by URL
     seen = set()
