@@ -15,11 +15,9 @@ This provider is ONLY used for adult content — the frontend resolver
 checks `isAdult` from AniList before including it in the race.
 """
 
-import asyncio
+import json
 import re
-from urllib.parse import quote
 
-from src.providers import _cache
 from src.providers._http import fetch_text
 from src.providers._media import build_ctx
 
@@ -47,7 +45,7 @@ def _slugify(title: str) -> str:
     )
 
 
-def _build_slugs(media: dict) -> list[str]:
+def _build_slugs(media: dict) -> list:
     """Generate slug candidates from all title variants."""
     titles = []
     t = media.get("title") or {}
@@ -55,7 +53,6 @@ def _build_slugs(media: dict) -> list[str]:
         v = t.get(key)
         if v:
             titles.append(v)
-    # Also try without season markers
     for syn in media.get("synonyms") or []:
         if syn:
             titles.append(syn)
@@ -67,10 +64,11 @@ def _build_slugs(media: dict) -> list[str]:
         if s and s not in seen:
             seen.add(s)
             slugs.append(s)
-        # Also try stripping common suffixes
+        # Try stripping common suffixes
         for suffix in (" the animation", " ova", " special"):
-            if s.endswith(suffix.replace(" ", "-")):
-                stripped = s[: -len(suffix.replace(" ", "-"))]
+            suffix_slug = suffix.replace(" ", "-")
+            if s.endswith(suffix_slug):
+                stripped = s[: -len(suffix_slug)]
                 if stripped and stripped not in seen:
                     seen.add(stripped)
                     slugs.append(stripped)
@@ -113,8 +111,7 @@ def _extract_streams(html: str, base: str) -> list:
         html, re.IGNORECASE,
     ):
         try:
-            import json as _json
-            data = _json.loads(m.group(1))
+            data = json.loads(m.group(1))
             videos = data if isinstance(data, list) else [data]
             for v in videos:
                 url = v.get("contentUrl") or v.get("embedUrl") or v.get("url")
@@ -152,18 +149,14 @@ def _extract_streams(html: str, base: str) -> list:
             })
 
     # 4. Look for m3u8/mp4 URLs in script tags (common in JW Player setups)
-    for m in re.finditer(
-        r'["\'](https?://[^"\']*?\.m3u8[^"\']*)["\']', html
-    ):
+    for m in re.finditer(r'["\'](https?://[^"\']*?\.m3u8[^"\']*)["\']', html):
         url = m.group(1)
         if url not in [s["url"] for s in streams]:
             streams.append({
                 "url": url, "type": "hls", "quality": "auto",
                 "audio": "sub", "server": NAME, "referer": base,
             })
-    for m in re.finditer(
-        r'["\'](https?://[^"\']*?\.mp4[^"\']*)["\']', html
-    ):
+    for m in re.finditer(r'["\'](https?://[^"\']*?\.mp4[^"\']*)["\']', html):
         url = m.group(1)
         if url not in [s["url"] for s in streams]:
             streams.append({
@@ -213,8 +206,8 @@ async def _probe_page(url: str) -> str | None:
         return None
 
 
-async def _find_page(media: dict, episode: int) -> tuple[str, str] | None:
-    """Find the correct page URL on hstream or hanime. Returns (base, html)."""
+async def _find_page(media: dict, episode: int):
+    """Find the correct page URL on hstream or hanime. Returns (base, html) or None."""
     slugs = _build_slugs(media)
     if not slugs:
         return None
@@ -238,12 +231,10 @@ async def _find_page(media: dict, episode: int) -> tuple[str, str] | None:
 
 
 async def get_episodes(anilist_id: int, ctx: dict | None = None) -> dict:
-    """Return episode list for an H-anime.
+    """Return episode list for an H-anime."""
+    if ctx is None:
+        ctx = await build_ctx(anilist_id)
 
-    H-anime sites typically list all episodes on a single page, so we
-    return a synthetic episode list based on the AniList count.
-    """
-    ctx = ctx or await build_ctx(anilist_id)
     media = ctx["media"]
     expected = media.get("episodes") or 1
 
@@ -279,7 +270,9 @@ async def get_episodes(anilist_id: int, ctx: dict | None = None) -> dict:
 
 async def watch(anilist_id: int, audio: str, ep: int, ctx: dict | None = None) -> list:
     """Extract streams for an H-anime episode."""
-    ctx = ctx or await build_ctx(anilist_id)
+    if ctx is None:
+        ctx = await build_ctx(anilist_id)
+
     media = ctx["media"]
 
     found = await _find_page(media, ep)
