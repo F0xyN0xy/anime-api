@@ -1,16 +1,21 @@
 """
-H-anime provider — hstream.moe + hanime.tv
-==========================================
+H-anime provider — hentaiocean.com (primary) + hstream.moe + hanime.tv
+=======================================================================
 
 Why this exists: generic providers either don't index H content at all or
-return wrong-anime streams for H IDs. These two sites are H-specific with
-clean slug-based URLs:
+return wrong-anime streams for H IDs. These sites are H-specific.
+
+hentaiocean.com has a proper API:
+  Fetch:  https://hentaiocean.com/api?action=hentai&slug={slug}
+  Embed:  https://hentaiocean.com/embed/{slug}
+  RSS:    https://hentaiocean.com/rss.xml (for reference)
+
+hstream.moe and hanime.tv use slug-based URLs:
   hstream.moe/hentai/{slug}
   hanime.tv/videos/hentai/{slug}
 
-Strategy: slugify the AniList title variants, probe both sites with many
-slug candidates (including episode/season suffix variants), scrape the HTML
-for video sources (m3u8/mp4/embed), and return them as streams.
+Strategy: slugify the AniList title variants, try hentaiocean API first
+(proper JSON response), fall back to hstream/hanime HTML scraping.
 
 This provider is ONLY used for adult content — the frontend resolver
 checks `isAdult` from AniList before including it in the race.
@@ -23,12 +28,13 @@ from src.providers._http import fetch_text
 from src.providers._media import build_ctx
 
 NAME = "hanime"
+BASE_HENTAIOCEAN = "https://hentaiocean.com"
 BASE_HSTREAM = "https://hstream.moe"
 BASE_HANIME = "https://hanime.tv"
 
 
 def _slugify(title: str) -> str:
-    """Slugify a title for hstream/hanime URL patterns."""
+    """Slugify a title for URL patterns."""
     return (
         title.lower()
         .replace("'", "")
@@ -49,12 +55,10 @@ def _slugify(title: str) -> str:
 def _build_slugs(media: dict, episode: int) -> list:
     """Generate slug candidates from all title variants.
 
-    hstream.moe and hanime.tv index by title slug, not AniList ID. The
-    AniList title (english/romaji/native) often differs from what the site
-    uses. We generate many candidates:
+    Sites index by title slug, not AniList ID. The AniList title often
+    differs from what the site uses. We generate many candidates:
     - Full title slug
     - Without "the animation" / "ova" / "special" suffixes
-    - With/without season markers
     - With episode suffix (for multi-episode series)
     """
     titles = []
@@ -106,6 +110,42 @@ def _build_slugs(media: dict, episode: int) -> list:
                 slugs.append(ep_slug2)
 
     return slugs
+
+
+async def _fetch_json(url: str) -> dict | None:
+    """Fetch a URL and return parsed JSON, or None on failure."""
+    try:
+        text = await fetch_text(url)
+        if not text:
+            return None
+        return json.loads(text)
+    except Exception:
+        return None
+
+
+async def _try_hentaiocean(slug: str) -> dict | None:
+    """Try hentaiocean.com API for a slug. Returns info dict or None."""
+    url = f"{BASE_HENTAIOCEAN}/api?action=hentai&slug={slug}"
+    data = await _fetch_json(url)
+    if data and data.get("info") and len(data["info"]) > 0:
+        return data["info"][0]
+    return None
+
+
+def _hentaiocean_streams(info: dict, slug: str) -> list:
+    """Build stream entries from hentaiocean info."""
+    streams = []
+    # The embed URL is the playable stream
+    embed_url = f"{BASE_HENTAIOCEAN}/embed/{slug}"
+    streams.append({
+        "url": embed_url,
+        "type": "embed",
+        "quality": "auto",
+        "audio": "sub",
+        "server": NAME,
+        "referer": BASE_HENTAIOCEAN,
+    })
+    return streams
 
 
 def _extract_streams(html: str, base: str) -> list:
@@ -181,7 +221,7 @@ def _extract_streams(html: str, base: str) -> list:
                 "referer": base,
             })
 
-    # 4. Look for m3u8/mp4 URLs in script tags (common in JW Player setups)
+    # 4. Look for m3u8/mp4 URLs in script tags
     for m in re.finditer(r'["\'](https?://[^"\']*?\.m3u8[^"\']*)["\']', html):
         url = m.group(1)
         if url not in [s["url"] for s in streams]:
@@ -200,38 +240,12 @@ def _extract_streams(html: str, base: str) -> list:
     return streams
 
 
-def _extract_subtitles(html: str, base: str) -> list:
-    """Extract subtitle tracks from the page."""
-    subs = []
-    for m in re.finditer(
-        r'<track[^>]+src=["\']([^"\']+)["\'][^>]*(?:label|srclang)=["\']([^"\']+)["\']',
-        html, re.IGNORECASE,
-    ):
-        url = m.group(1)
-        if url.startswith("/"):
-            url = f"{base}{url}"
-        subs.append({"url": url, "lang": m.group(2)})
-    # Also try reversed attribute order
-    for m in re.finditer(
-        r'<track[^>]*(?:label|srclang)=["\']([^"\']+)["\'][^>]*src=["\']([^"\']+)["\']',
-        html, re.IGNORECASE,
-    ):
-        url = m.group(2)
-        if url.startswith("/"):
-            url = f"{base}{url}"
-        entry = {"url": url, "lang": m.group(1)}
-        if entry not in subs:
-            subs.append(entry)
-    return subs
-
-
 async def _probe_page(url: str) -> str | None:
     """Check if a page exists and looks like a valid video page."""
     try:
         html = await fetch_text(url)
         if not html:
             return None
-        # Must look like a video page
         if any(k in html for k in ("<video", "player", "embed", ".m3u8", ".mp4")):
             return html
         return None
@@ -239,12 +253,21 @@ async def _probe_page(url: str) -> str | None:
         return None
 
 
-async def _find_page(media: dict, episode: int):
-    """Find the correct page URL on hstream or hanime. Returns (base, html) or None."""
+async def _find_hentaiocean(media: dict, episode: int) -> tuple[str, list] | None:
+    """Try hentaiocean.com API. Returns (slug, streams) or None."""
     slugs = _build_slugs(media, episode)
-    if not slugs:
-        return None
+    for slug in slugs:
+        info = await _try_hentaiocean(slug)
+        if info:
+            streams = _hentaiocean_streams(info, slug)
+            if streams:
+                return (slug, streams)
+    return None
 
+
+async def _find_html_page(media: dict, episode: int) -> tuple[str, list] | None:
+    """Try hstream.moe and hanime.tv. Returns (base, streams) or None."""
+    slugs = _build_slugs(media, episode)
     for slug in slugs:
         targets = [
             (BASE_HSTREAM, f"{BASE_HSTREAM}/hentai/{slug}"),
@@ -253,7 +276,9 @@ async def _find_page(media: dict, episode: int):
         for base, url in targets:
             html = await _probe_page(url)
             if html:
-                return (base, html)
+                streams = _extract_streams(html, base)
+                if streams:
+                    return (base, streams)
     return None
 
 
@@ -265,8 +290,11 @@ async def get_episodes(anilist_id: int, ctx: dict | None = None) -> dict:
     media = ctx["media"]
     expected = media.get("episodes") or 1
 
-    # Try to find the page to confirm it exists
-    found = await _find_page(media, 1)
+    # Try to find the anime on hentaiocean to confirm it exists
+    found = await _find_hentaiocean(media, 1)
+    if not found:
+        # Try HTML sites as fallback
+        found = await _find_html_page(media, 1)
     if not found:
         raise RuntimeError(f"Hanime: no page found for AniList {anilist_id}")
 
@@ -302,14 +330,15 @@ async def watch(anilist_id: int, audio: str, ep: int, ctx: dict | None = None) -
 
     media = ctx["media"]
 
-    found = await _find_page(media, ep)
+    # Try hentaiocean first (proper API)
+    found = await _find_hentaiocean(media, ep)
+    if not found:
+        # Fall back to hstream/hanime HTML scraping
+        found = await _find_html_page(media, ep)
     if not found:
         raise RuntimeError(f"Hanime: episode {ep} not found for AniList {anilist_id}")
 
-    base, html = found
-    streams = _extract_streams(html, base)
-    if not streams:
-        raise RuntimeError(f"Hanime: no streams extracted for episode {ep}")
+    _, streams = found
 
     # Deduplicate by URL
     seen = set()
