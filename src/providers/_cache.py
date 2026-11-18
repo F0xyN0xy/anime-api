@@ -21,4 +21,4 @@ def is_fresh(entry) -> bool:
 
 def cached(key, ttl):
     entry = get(key)
-    return entry["data"] if is_fresh(entry) else None
+    return entry["data"] if is_fresh(entry) else None # type: ignore

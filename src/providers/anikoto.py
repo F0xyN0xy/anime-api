@@ -185,7 +185,7 @@ def _decode_script_string(value: str) -> str:
             return chr(int(hx, 16))
         return {"b": "\b", "n": "\n", "f": "\f", "r": "\r",
                 "t": "\t", "v": "\v", "0": "\0"}.get(esc, esc)
-    return re.sub(r"\\u([\dA-Fa-f]{4})|\\x([\dA-Fa-f]{2})|\\([\\'\"bnfrtv0])", _rep, value)
+    return re.sub(r"\\u([\dA-Fa-f]{4})|\\x([\dA-Fa-f]{2})|\\([\\'\"bnfrtv0])", _rep, value) # type: ignore
 
 
 def _script_strings(script: str) -> list:
@@ -366,7 +366,7 @@ async def _extract_megaplay_details(embed_url: str):
         legacy_url = None
         if isinstance(legacy_data, dict):
             legacy_url = ((legacy_data.get("sources") or {}).get("file")
-                          or _megaplay_decrypt(legacy_data.get("enc"), script))
+                          or _megaplay_decrypt(legacy_data.get("enc"), script)) # type: ignore
         sources, seen_urls = [], set()
         modern_url = ((modern_data.get("sources") or {}).get("file")
                       if isinstance(modern_data, dict) else None)
@@ -670,11 +670,11 @@ async def _scrape_episode_watch(anilist_id: int, audio: str, ep_num: int, ctx: d
             if isinstance(resolved, dict):
                 skip_data = (resolved.get("result") or {}).get("skip_data") or {}
                 for key, dest in (("intro", server_intro), ("outro", server_outro)):
-                    val = skip_data.get(key)
+                    val = skip_data.get(key) # type: ignore
                     if isinstance(val, (list, tuple)) and len(val) == 2:
                         s, e = _num(val[0]), _num(val[1])
                         if s or e:
-                            dest["start"], dest["end"] = s, e
+                            dest["start"], dest["end"] = s, e # type: ignore
             hls_sources = []
             if "#aHR0c" in embed_url:
                 frag = embed_url.split("#", 1)[1]
@@ -702,7 +702,7 @@ async def _scrape_episode_watch(anilist_id: int, audio: str, ep_num: int, ctx: d
                     if isinstance(val, dict):
                         s, e = _num(val.get("start")), _num(val.get("end"))
                         if s or e:
-                            dest["start"], dest["end"] = s, e
+                            dest["start"], dest["end"] = s, e # type: ignore
             try:
                 parsed = urlparse(embed_url)
                 embed_origin = parsed.scheme + "://" + parsed.netloc + "/"

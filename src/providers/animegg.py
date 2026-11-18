@@ -169,7 +169,7 @@ async def scrape_episode_watch(ep_slug: str, audio: str) -> dict:
     for r in results:
         if isinstance(r, Exception):
             continue
-        streams.extend(r)
+        streams.extend(r) # type: ignore
     return {"title": title, "streams": streams}
 
 

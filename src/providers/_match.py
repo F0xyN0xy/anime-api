@@ -166,7 +166,7 @@ def build_titles(media: dict | None, anizip: dict | None) -> list:
 def expected_count(media: dict | None, anizip: dict | None):
     counts = []
     if isinstance((media or {}).get("episodes"), int):
-        counts.append(media["episodes"])
+        counts.append(media["episodes"]) # type: ignore
     for k in ((anizip or {}).get("episodes") or {}).keys():
         try:
             v = int(k)

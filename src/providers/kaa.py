@@ -40,9 +40,9 @@ async def kaa_all_episodes(show_slug: str) -> list:
     first = await kaa_episode_page(show_slug, 1)
     first = first if isinstance(first, dict) else {}
     pages = first.get("pages") if isinstance(first.get("pages"), list) else []
-    all_eps = list(first.get("result")) if isinstance(first.get("result"), list) else []
+    all_eps = list(first.get("result")) if isinstance(first.get("result"), list) else [] # type: ignore
 
-    if len(pages) > 1:
+    if len(pages) > 1: # type: ignore
         async def _one(pg):
             eps = pg.get("eps") if isinstance(pg, dict) else None
             start_ep = (eps or [None])[0]
@@ -52,9 +52,9 @@ async def kaa_all_episodes(show_slug: str) -> list:
             d = d if isinstance(d, dict) else {}
             return d.get("result") if isinstance(d.get("result"), list) else []
 
-        rest = await asyncio.gather(*[_one(pg) for pg in pages[1:]])
+        rest = await asyncio.gather(*[_one(pg) for pg in pages[1:]]) # type: ignore
         for batch in rest:
-            all_eps.extend(batch)
+            all_eps.extend(batch) # type: ignore
 
     return all_eps
 
@@ -90,7 +90,7 @@ def score_candidate(candidate: dict, titles: list, season_year, anilist_format) 
     title_en = candidate.get("title_en") or ""
     title_jp = candidate.get("title") or ""
     try:
-        kaa_year = int(candidate.get("year"))
+        kaa_year = int(candidate.get("year")) # type: ignore
     except (TypeError, ValueError):
         kaa_year = 0
     kaa_type = str(candidate.get("type") or "").lower()
@@ -197,7 +197,7 @@ async def build_ep_map(show_slug: str, show_info: dict) -> list:
             "number": e.get("episode_number"),
             "fullSlug": f"ep-{e.get('episode_number')}-{e.get('slug')}",
             "title": e.get("title"),
-            "duration": round(e.get("duration_ms") / 1000) if e.get("duration_ms") else None,
+            "duration": round(e.get("duration_ms") / 1000) if e.get("duration_ms") else None, # type: ignore
         })
     return out
 
@@ -231,7 +231,7 @@ async def get_episodes(anilist_id: int, ctx: dict | None = None) -> dict:
             continue
         if expected and num > expected:
             continue
-        meta = episode_meta(num, ctx)
+        meta = episode_meta(num, ctx) # type: ignore
         base = {
             "number": num,
             "title": meta["title"] or ep.get("title") or f"Episode {num}",

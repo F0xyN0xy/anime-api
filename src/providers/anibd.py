@@ -15,7 +15,8 @@ async def fetch_servers(anilist_id: int) -> list:
 
 
 async def fetch_player_links(provider_link: str) -> list:
-    data = await fetch_json(f"{BASE}/apilink.php?data={quote(provider_link, safe="-_.!~*'()")}")
+    encoded_link = quote(provider_link, safe="-_.!~*'()")
+    data = await fetch_json(f"{BASE}/apilink.php?data={encoded_link}")
     return data if isinstance(data, list) else []
 
 
@@ -73,7 +74,7 @@ def _build_lists(anilist_id: int, groups: list, ctx: dict, expected) -> dict:
             if number in seen:
                 continue
             seen.add(number)
-            meta = episode_meta(number, ctx)
+            meta = episode_meta(number, ctx) # type: ignore
             bucket.append({
                 "id": f"watch/{NAME}/{anilist_id}/{audio}/{NAME}-{number}",
                 "number": number,
@@ -103,7 +104,7 @@ async def find_episode_link(anilist_id: int, audio: str, ep: int):
             item = item if isinstance(item, dict) else {}
             raw = item.get("name") if item.get("name") is not None else item.get("slug")
             try:
-                if float(raw) == float(ep):
+                if float(raw) == float(ep): # type: ignore
                     return item.get("link")
             except (TypeError, ValueError):
                 continue

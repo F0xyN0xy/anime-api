@@ -641,7 +641,7 @@ async def _fetch_episodes_list(anime_id: str, limit: int = 2000) -> list:
 
 def _merge_episode(anilist_id: int, ep: dict, ctx: dict, audio: str) -> dict:
     number = ep.get("episode_number")
-    meta = episode_meta(number, ctx)
+    meta = episode_meta(number, ctx) # type: ignore
     duration = meta["duration"]
     if duration is None and _num_or_none(ep.get("duration")) is not None:
         duration = ep["duration"] * 60
@@ -671,7 +671,7 @@ async def get_episodes(anilist_id: int, ctx: dict | None = None) -> dict:
     if not re_eps:
         raise RuntimeError(
             f"No reanime episodes found for AniList {anilist_id} (slug {series['animeId']})")
-    has_sub = series.get("subbed") is None or series.get("subbed") > 0
+    has_sub = series.get("subbed") is None or series.get("subbed") > 0 # type: ignore
     dub_count = series.get("dubbed") or 0
     try:
         dub_count = int(dub_count)
@@ -735,7 +735,7 @@ async def _resolve_stream(anilist_id: int, audio: str, ep: int, ctx: dict | None
         audio_types = ("sub", "s-sub", "dub", "s-dub")
     servers = sorted(
         [s for s in links if isinstance(s, dict) and s.get("dataType") in audio_types],
-        key=lambda s: order.get(s.get("serverName"), 9),
+        key=lambda s: order.get(s.get("serverName"), 9), # type: ignore
     )
     if not servers:
         raise RuntimeError(f"No {audio} servers for \"{title}\" ep {ep}")

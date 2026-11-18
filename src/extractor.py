@@ -6,11 +6,11 @@ from src.config import ANILIST_URL, iter_miruro_pipe_targets
 from src.parser import encode_pipe_request, decode_pipe_response, deep_translate
 
 
-async def anilist_query(query: str, variables: dict = None):
+async def anilist_query(query: str, variables: dict = None): # type: ignore
 
     body = {"query": query}
     if variables:
-        body["variables"] = variables
+        body["variables"] = variables # type: ignore
 
     headers = {
         "Content-Type": "application/json",

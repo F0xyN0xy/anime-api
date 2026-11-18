@@ -536,8 +536,8 @@ def _tok_js(expr: str) -> list:
             continue
         if ch.isdigit() or (ch == "." and i + 1 < n and expr[i + 1].isdigit()):
             m = re.match(r"0[xX][0-9a-fA-F]+|\d+\.?\d*", expr[i:])
-            toks.append(("num", m.group(0)))
-            i += len(m.group(0))
+            toks.append(("num", m.group(0))) # type: ignore
+            i += len(m.group(0)) # type: ignore
             continue
         if ch in ("'", '"'):
             j = i + 1
@@ -557,7 +557,7 @@ def _tok_js(expr: str) -> list:
             continue
         if ch.isalpha() or ch in ("_", "$"):
             m = re.match(r"[A-Za-z_$][\w$]*", expr[i:])
-            name = m.group(0)
+            name = m.group(0) # type: ignore
             i += len(name)
             while i < n and expr[i] == ".":
                 m2 = re.match(r"\.[A-Za-z_$][\w$]*", expr[i:])
@@ -617,7 +617,7 @@ class _JsParser:
         while self.peek() == ("op", "."):
             self.next()
             k, v = self.next()
-            if k != "ident" or "." in v:
+            if k != "ident" or "." in v: # type: ignore
                 raise ValueError("bad member access")
             node = ("member", node, v)
         return node
@@ -632,7 +632,7 @@ class _JsParser:
                     k, v = self.next()
                     if k not in ("ident", "str", "num"):
                         raise ValueError("bad object key")
-                    key = v[1:-1] if k == "str" else v
+                    key = v[1:-1] if k == "str" else v # type: ignore
                     if self.next() != ("op", ":"):
                         raise ValueError("missing :")
                     pairs.append((key, self.parse_expr()))
@@ -1097,7 +1097,7 @@ def _emulated_fragment_config(chunk: str):
                 "fragAdd": cv["fragAdd"],
                 "bootPrefix": cv["bootPrefix"],
                 "join": cv["join"],
-                "parts": [str(p) for p in cv["parts"]],
+                "parts": [str(p) for p in cv["parts"]], # type: ignore
                 "omitEmptyLane": bool(cv.get("omitEmptyLane")),
             }
     return None
@@ -1356,13 +1356,23 @@ async def fetch_bootstrap(lane: str = CONTENT_LANE, force: bool = False) -> dict
         config = await discover_crypto_config(force or refresh > 0)
         retry_fresh = False
         for epoch in current_epochs():
+            build_id = quote(str(config["buildId"]), safe="'")
+            encoded_lane = quote(str(lane), safe="'")
+            bootstrap_url = (
+                f"{API}/client-crypto/v1/bootstrap"
+                f"?buildId={build_id}&k={encoded_lane}"
+            )
+
             res = await _api_request(
                 "GET",
-                f"{API}/client-crypto/v1/bootstrap?buildId={quote(str(config['buildId']), safe="'")}"
-                f"&k={quote(str(lane), safe="'")}",
-                {"Referer": f"{REFERER}/", "Origin": REFERER,
-                 "x-build-id": config["buildId"],
-                 "x-aa-boot": make_boot_token(config, epoch, lane)})
+                bootstrap_url,
+                {
+                    "Referer": f"{REFERER}/",
+                    "Origin": REFERER,
+                    "x-build-id": config["buildId"],
+                    "x-aa-boot": make_boot_token(config, epoch, lane),
+                },
+            )
             raw = res.text
             if res.status_code != 200:
                 last_error = RuntimeError(f"Bootstrap {res.status_code}: {raw[:180]}")
@@ -1657,13 +1667,13 @@ async def api_post(query: str, variables: dict, build_id=None, extensions=None) 
     raw = res.text
     if res.status_code != 200:
         err = RuntimeError(f"API POST {res.status_code}")
-        err.raw_body = raw
+        err.raw_body = raw # type: ignore
         raise err
     try:
         payload = json.loads(raw)
     except Exception:
         err = RuntimeError("API POST invalid JSON")
-        err.raw_body = raw
+        err.raw_body = raw # type: ignore
         raise err
     errors = payload.get("errors") or []
     if errors:
@@ -1671,8 +1681,8 @@ async def api_post(query: str, variables: dict, build_id=None, extensions=None) 
                      or "GraphQL error") for e in errors]
         err = (NeedCaptchaError(" \u00b7 ".join(messages)) if "NEED_CAPTCHA" in messages
                else RuntimeError(" \u00b7 ".join(messages)))
-        err.raw_body = raw
-        err.graphql = payload
+        err.raw_body = raw # type: ignore
+        err.graphql = payload # type: ignore
         raise err
     return payload.get("data") or {}
 
@@ -1697,13 +1707,13 @@ async def api_episode(query: str, variables: dict, force: bool = False,
     raw = res.text
     if res.status_code != 200:
         err = RuntimeError(f"API {res.status_code}")
-        err.raw_body = raw
+        err.raw_body = raw # type: ignore
         raise err
     try:
         payload = json.loads(raw)
     except Exception:
         err = RuntimeError("API invalid JSON")
-        err.raw_body = raw
+        err.raw_body = raw # type: ignore
         raise err
     errors = payload.get("errors") or []
     messages = [(e.get("message") or (e.get("extensions") or {}).get("code") or "")
@@ -1731,7 +1741,7 @@ async def api_episode(query: str, variables: dict, force: bool = False,
                                      captcha_retry=captcha_retry + 1,
                                      post_fallback=True)
         err = NeedCaptchaError("MKissa requested captcha")
-        err.raw_body = raw
+        err.raw_body = raw # type: ignore
         raise err
     if any(re.match(r"^AA_CRYPTO_", m) for m in messages):
         if not force:
@@ -1739,14 +1749,14 @@ async def api_episode(query: str, variables: dict, force: bool = False,
                                      captcha_retry=captcha_retry, captcha=captcha,
                                      post_fallback=post_fallback)
         err = RuntimeError(" \u00b7 ".join(messages))
-        err.raw_body = raw
+        err.raw_body = raw # type: ignore
         raise err
     data = payload.get("data") or {}
     if data.get("tobeparsed"):
         return decrypt_tobeparsed(data["tobeparsed"], key)
     if messages:
         err = RuntimeError(" \u00b7 ".join(messages))
-        err.raw_body = raw
+        err.raw_body = raw # type: ignore
         raise err
     return data
 
@@ -2089,7 +2099,7 @@ async def extract_source(src: dict) -> dict:
         host = (parsed.hostname or "").lower().removeprefix("www.")
         path = parsed.path or ""
         if host == "allanime.day" and re.search("/apivtwo/clock", path, re.IGNORECASE):
-            extracted_url = await extract_clock(url)
+            extracted_url = await extract_clock(url) # type: ignore
         elif src.get("type") == "player":
             extracted_url = url
         elif host == "mp4upload.com":
@@ -2097,7 +2107,7 @@ async def extract_source(src: dict) -> dict:
             if m:
                 extracted_url = await extract_mp4(m.group(1))
         elif host == "uns.bio" or host.endswith(".uns.bio"):
-            extracted_url = await extract_uns(url)
+            extracted_url = await extract_uns(url) # type: ignore
         elif host == "ok.ru":
             m = re.search("/(?:videoembed/)?([0-9]+)(?:[/?#]|$)", url or "", re.IGNORECASE)
             if m:
@@ -2121,7 +2131,7 @@ def _map_source(item: dict, audio: str):
     url = item.get("extractedUrl") or item.get("url")
     if not url:
         return None
-    if is_clock_url(item.get("url")) and not item.get("extractedUrl"):
+    if is_clock_url(item.get("url")) and not item.get("extractedUrl"): # type: ignore
         return None
     headers = item.get("headers") or {}
     return {"url": url, "type": item.get("extractedType") or "hls", "server": item.get("name") or "MKissa", "audio": audio, "referer": headers.get("Referer") or REFERER}
