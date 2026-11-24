@@ -1,14 +1,11 @@
 from fastapi import APIRouter, Query, HTTPException
 from typing import Optional
 import httpx
-import base64
 import httpx
-from curl_cffi.requests import AsyncSession
 
 from src.queries import MEDIA_LIST_FIELDS, MEDIA_FULL_FIELDS
-from src.parser import proxy_deep_images, inject_source_slugs, encode_pipe_request, decode_pipe_response
-from src.extractor import anilist_query, fetch_raw_episodes
-from src.config import iter_miruro_pipe_targets
+from src.parser import proxy_deep_images
+from src.extractor import anilist_query
 from src.providers import _race as provider_race
 
 router = APIRouter()
@@ -452,77 +449,13 @@ async def get_anime_recommendations(
 
 @router.get("/episodes/{anilist_id}")
 async def get_episodes(anilist_id: int):
-
     try:
         native = await provider_race.merged_episodes(anilist_id)
         if native:
             return proxy_deep_images(native)
     except Exception as e:
-        print(f"[KUHI API] native episodes failed, falling back to pipe: {e}")
-    data = await fetch_raw_episodes(anilist_id)
-    return proxy_deep_images(inject_source_slugs(data, anilist_id))
-
-
-@router.get("/providers/status")
-async def get_providers_status():
-
-    return provider_race.providers_status()
-
-
-@router.get("/bridge-status")
-async def get_bridge_status():
-
-    return provider_race.providers_status()
-
-
-@router.get("/genres")
-async def get_genres():
-
-    gql = """
-    query {
-        GenreCollection
-    }
-    """
-    data = await anilist_query(gql)
-    return {"genres": data.get("GenreCollection", [])}
-
-
-@router.get("/sources")
-async def get_sources(
-    episodeId: str = Query(..., description="episode tracking string"),
-    provider: str = Query(..., description="video provider host"),
-    anilistId: int = Query(..., description="anime db identification code"),
-    category: str = Query("sub", description="dubbed or subbed version"),
-):
-
-    enc_id = base64.urlsafe_b64encode(episodeId.encode()).decode().rstrip('=')
-    payload = {
-        "path": "sources",
-        "method": "GET",
-        "query": {
-            "episodeId": enc_id,
-            "provider": provider,
-            "category": category,
-            "anilistId": anilistId,
-        },
-        "body": None,
-        "version": "0.1.0",
-    }
-    encoded_req = encode_pipe_request(payload)
-
-    async with AsyncSession(impersonate="chrome124", timeout=15.0) as client:
-        last_status = None
-        for pipe_target, headers in iter_miruro_pipe_targets(encoded_req):
-            print(f"\n[KUHI API] extracting stream sources pipe targeting:", pipe_target)
-            try:
-                res = await client.get(pipe_target, headers=headers)
-                last_status = res.status_code
-                if res.status_code == 200:
-                    return proxy_deep_images(decode_pipe_response(res.text.strip()))
-            except Exception as e:
-                print(f"[KUHI API] Failed to connect to {pipe_target}: {e}")
-
-        raise HTTPException(status_code=last_status or 502, detail="fetching pipe failed real bad")
+        print(f"[KUHI API] native episode discovery failed: {e}")
+    raise HTTPException(status_code=503, detail="episode discovery providers are unavailable")
 
 
 @router.get("/extract/{query}")
@@ -583,111 +516,21 @@ async def extract_simple(
 
     try:
         raced = await provider_race.race_watch(anilist_id, episode, audio, preferred=wanted)
-        if raced:
-            result = {
-                "anilistId": anilist_id,
-                "episode": episode,
-                "type": audio,
-                "provider": raced["provider"],
-                "defaultProvider": raced.get("defaultProvider"),
-                "requestedProvider": raced.get("requestedProvider"),
-                "streams": raced["streams"],
-                "subtitles": provider_race.merge_subtitles(raced["streams"]),
-            }
-            return proxy_deep_images(result)
     except Exception as e:
-        print(f"[KUHI API] native race failed, falling back to pipe: {e}")
+        print(f"[KUHI API] native provider race failed: {e}")
+        raise HTTPException(status_code=503, detail="stream providers are temporarily unavailable")
 
-    data = await fetch_raw_episodes(anilist_id)
-    providers = data.get("providers", {})
+    if not raced:
+        raise HTTPException(status_code=404, detail=f"no {audio} streams found for episode {episode}")
 
-    if not providers:
-        raise HTTPException(status_code=404, detail="no providers available for this anime")
-
-    target_episode_id = None
-    target_provider = None
-    target_cat = None
-
-    ranking = ["zoro", "bee", "telli", "arc", "yugen", "jet", "neo", "kiwi"]
-
-    for prov in ranking:
-        if prov in providers:
-            prov_data = providers[prov]
-            eps = prov_data.get("episodes", {})
-            for cat in ["sub", "dub", "raw"]:
-                if cat in eps:
-                    cat_eps = eps[cat]
-                    if isinstance(cat_eps, list):
-                        for ep in cat_eps:
-                            if ep.get("number") == episode:
-                                target_episode_id = ep.get("id")
-                                target_provider = prov
-                                target_cat = cat
-                                break
-                if target_episode_id:
-                    break
-        if target_episode_id:
-            break
-
-    if not target_episode_id:
-        raise HTTPException(status_code=404, detail=f"episode {episode} not found in any provider")
-
-    last_error = None
-    providers_to_try = [(target_provider, target_cat, target_episode_id)]
-
-    for prov in ranking:
-        if prov != target_provider and prov in providers:
-            prov_data = providers[prov]
-            eps = prov_data.get("episodes", {})
-            for cat in ["sub", "dub", "raw"]:
-                if cat in eps:
-                    cat_eps = eps[cat]
-                    if isinstance(cat_eps, list):
-                        for ep in cat_eps:
-                            if ep.get("number") == episode:
-                                providers_to_try.append((prov, cat, ep.get("id")))
-                                break
-
-    for try_provider, try_cat, try_ep_id in providers_to_try:
-        try:
-            enc_id = base64.urlsafe_b64encode(try_ep_id.encode()).decode().rstrip('=')
-            payload = {
-                "path": "sources",
-                "method": "GET",
-                "query": {
-                    "episodeId": enc_id,
-                    "provider": try_provider,
-                    "category": try_cat,
-                    "anilistId": anilist_id,
-                },
-                "body": None,
-                "version": "0.1.0",
-            }
-            encoded_req = encode_pipe_request(payload)
-
-            async with AsyncSession(impersonate="chrome124", timeout=15.0) as client:
-                for pipe_target, headers in iter_miruro_pipe_targets(encoded_req):
-                    print(f"\n[KUHI API] trying provider {try_provider}: {pipe_target}")
-                    try:
-                        res = await client.get(pipe_target, headers=headers)
-
-                        if res.status_code == 200:
-                            result = decode_pipe_response(res.text.strip())
-                            print(f"[KUHI API] success with provider {try_provider}")
-                            return proxy_deep_images(result)
-
-                        last_error = f"{try_provider} failed: {res.status_code}"
-                        print(f"[KUHI API] {last_error}")
-                    except Exception as e:
-                        print(f"[KUHI API] Failed to connect to {pipe_target}: {e}")
-        except Exception as e:
-            last_error = f"{try_provider} error: {str(e)}"
-            print(f"[KUHI API] {last_error}")
-            continue
-
-    if audio == "dub":
-        raise HTTPException(
-            status_code=404,
-            detail=f"no dub streams found for episode {episode}; try type=sub",
-        )
-    raise HTTPException(status_code=500, detail=f"all providers failed. last error: {last_error}")
+    result = {
+        "anilistId": anilist_id,
+        "episode": episode,
+        "type": audio,
+        "provider": raced["provider"],
+        "defaultProvider": raced.get("defaultProvider"),
+        "requestedProvider": raced.get("requestedProvider"),
+        "streams": raced["streams"],
+        "subtitles": provider_race.merge_subtitles(raced["streams"]),
+    }
+    return proxy_deep_images(result)
